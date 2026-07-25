@@ -122,12 +122,14 @@ class PacketClaimAndSettlementTest {
         String requestJson = encryptedRequestJson(
                 senderId, receiver.deviceId(), new BigDecimal("40.00"), serverPublicKey, Instant.now(), "path-A");
 
-        mockMvc.perform(post("/packets/relay")
+        String firstResponse = mockMvc.perform(post("/packets/relay")
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestJson))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.status").value("SETTLED"));
+                .andExpect(jsonPath("$.status").value("SETTLED"))
+                .andReturn().getResponse().getContentAsString();
+        String packetId = objectMapper.readTree(firstResponse).get("id").asText();
 
         String duplicateJson = requestJson.replace("\"path-A\"", "\"path-B\"");
 
@@ -142,9 +144,18 @@ class PacketClaimAndSettlementTest {
                 .andExpect(jsonPath("$.balance").value(40.00));
 
         String adminToken = adminToken("claim-admin@example.com");
-        mockMvc.perform(get("/admin/rejected-packets").header("Authorization", "Bearer " + adminToken))
+        String rejectedResponse = mockMvc.perform(get("/admin/rejected-packets").header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.duplicateDeliveryPackets.length()").value(1));
+                .andReturn().getResponse().getContentAsString();
+
+        boolean found = false;
+        for (JsonNode node : objectMapper.readTree(rejectedResponse).get("duplicateDeliveryPackets")) {
+            if (node.get("id").asText().equals(packetId)) {
+                found = true;
+                break;
+            }
+        }
+        org.junit.jupiter.api.Assertions.assertTrue(found, "expected packet " + packetId + " in duplicateDeliveryPackets");
     }
 
     @Test

@@ -11,4 +11,6 @@ public interface RelayLogRepository extends JpaRepository<RelayLog, UUID> {
 
     @Query("SELECT r.packetId FROM RelayLog r GROUP BY r.packetId HAVING COUNT(r) > 1")
     List<UUID> findPacketIdsWithMultipleDeliveries();
+
+    List<RelayLog> findByPacketId(UUID packetId);
 }
