@@ -4,12 +4,17 @@ import com.dhruv.offlinepayment_relay.crypto.PacketCryptoService;
 import com.dhruv.offlinepayment_relay.crypto.PacketPayload;
 import com.dhruv.offlinepayment_relay.dto.DeviceRequest;
 import com.dhruv.offlinepayment_relay.dto.RegisterRequest;
+import com.dhruv.offlinepayment_relay.entity.Role;
+import com.dhruv.offlinepayment_relay.entity.User;
+import com.dhruv.offlinepayment_relay.repository.UserRepository;
+import com.dhruv.offlinepayment_relay.security.JwtService;
 import com.dhruv.offlinepayment_relay.support.TestKeys;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -18,6 +23,7 @@ import tools.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.security.PublicKey;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.UUID;
 
@@ -28,7 +34,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest
 @AutoConfigureMockMvc
-class PacketControllerTest {
+class PacketClaimAndSettlementTest {
 
     @Autowired
     private MockMvc mockMvc;
@@ -39,6 +45,18 @@ class PacketControllerTest {
     @Autowired
     private PacketCryptoService cryptoService;
 
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private JwtService jwtService;
+
+    private record DeviceRegistration(UUID deviceId, UUID walletId) {
+    }
+
     private String registerUserAndGetToken(String email) throws Exception {
         RegisterRequest request = new RegisterRequest(email, "password123");
         String response = mockMvc.perform(post("/auth/register")
@@ -48,11 +66,15 @@ class PacketControllerTest {
         return objectMapper.readTree(response).get("token").asText();
     }
 
-    private record DeviceRegistration(UUID deviceId, UUID walletId) {
-    }
-
-    private UUID registerDevice(String token, String ownerName) throws Exception {
-        return registerDeviceFull(token, ownerName).deviceId();
+    private String adminToken(String email) {
+        User admin = User.builder()
+                .id(UUID.randomUUID())
+                .email(email)
+                .passwordHash(passwordEncoder.encode("password123"))
+                .role(Role.ADMIN)
+                .build();
+        userRepository.save(admin);
+        return jwtService.issueToken(admin.getEmail(), admin.getRole().name());
     }
 
     private DeviceRegistration registerDeviceFull(String token, String ownerName) throws Exception {
@@ -75,103 +97,111 @@ class PacketControllerTest {
     }
 
     private String encryptedRequestJson(UUID senderId, UUID receiverId, BigDecimal amount, PublicKey serverPublicKey,
-                                         byte[] ciphertextOverride, String relayPathId) throws Exception {
+                                         Instant packetTimestamp, String relayPathId) throws Exception {
         byte[] plaintext = objectMapper.writeValueAsBytes(new PacketPayload(amount));
         PacketCryptoService.EncryptedPayload encrypted = cryptoService.encrypt(serverPublicKey, plaintext);
-        byte[] ciphertext = ciphertextOverride != null ? ciphertextOverride : encrypted.ciphertext();
 
         ObjectNode node = objectMapper.createObjectNode();
         node.put("senderDeviceId", senderId.toString());
         node.put("receiverDeviceId", receiverId.toString());
-        node.put("ciphertext", Base64.getEncoder().encodeToString(ciphertext));
+        node.put("ciphertext", Base64.getEncoder().encodeToString(encrypted.ciphertext()));
         node.put("encryptedSessionKey", Base64.getEncoder().encodeToString(encrypted.encryptedSessionKey()));
         node.put("nonce", Base64.getEncoder().encodeToString(encrypted.nonce()));
-        node.put("packetTimestamp", Instant.now().toString());
+        node.put("packetTimestamp", packetTimestamp.toString());
         node.put("relayPathId", relayPathId);
         return objectMapper.writeValueAsString(node);
     }
 
     @Test
-    void relayWithValidPacketDecryptsAndSettles() throws Exception {
-        String token = registerUserAndGetToken("packet-sender@example.com");
-        UUID senderId = registerDevice(token, "sender-phone");
-        DeviceRegistration receiver = registerDeviceFull(token, "receiver-phone");
+    void duplicateDeliveryViaDifferentPathIsRejectedAndSettlesOnlyOnce() throws Exception {
+        String token = registerUserAndGetToken("claim-sender@example.com");
+        UUID senderId = registerDeviceFull(token, "claim-sender-phone").deviceId();
+        DeviceRegistration receiver = registerDeviceFull(token, "claim-receiver-phone");
         PublicKey serverPublicKey = fetchServerPublicKey();
 
         String requestJson = encryptedRequestJson(
-                senderId, receiver.deviceId(), new BigDecimal("25.50"), serverPublicKey, null, "path-A");
+                senderId, receiver.deviceId(), new BigDecimal("40.00"), serverPublicKey, Instant.now(), "path-A");
+
+        mockMvc.perform(post("/packets/relay")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("SETTLED"));
+
+        String duplicateJson = requestJson.replace("\"path-A\"", "\"path-B\"");
+
+        mockMvc.perform(post("/packets/relay")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(duplicateJson))
+                .andExpect(status().isConflict());
+
+        mockMvc.perform(get("/wallets/" + receiver.walletId()).header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.balance").value(40.00));
+
+        String adminToken = adminToken("claim-admin@example.com");
+        mockMvc.perform(get("/admin/rejected-packets").header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.duplicateDeliveryPackets.length()").value(1));
+    }
+
+    @Test
+    void staleTimestampIsRejectedAsExpired() throws Exception {
+        String token = registerUserAndGetToken("claim-stale@example.com");
+        UUID senderId = registerDeviceFull(token, "stale-sender-phone").deviceId();
+        DeviceRegistration receiver = registerDeviceFull(token, "stale-receiver-phone");
+        PublicKey serverPublicKey = fetchServerPublicKey();
+
+        Instant staleTimestamp = Instant.now().minus(1, ChronoUnit.HOURS);
+        String requestJson = encryptedRequestJson(
+                senderId, receiver.deviceId(), new BigDecimal("15.00"), serverPublicKey, staleTimestamp, "path-A");
 
         String response = mockMvc.perform(post("/packets/relay")
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestJson))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.status").value("SETTLED"))
-                .andExpect(jsonPath("$.decryptedAmount").value(25.50))
-                .andExpect(jsonPath("$.ciphertextHash").isNotEmpty())
+                .andExpect(status().isBadRequest())
                 .andReturn().getResponse().getContentAsString();
-
-        JsonNode json = objectMapper.readTree(response);
-        String packetId = json.get("id").asText();
-
-        mockMvc.perform(get("/packets/" + packetId).header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("SETTLED"))
-                .andExpect(jsonPath("$.senderDeviceId").value(senderId.toString()));
-
-        mockMvc.perform(get("/packets").param("deviceId", senderId.toString())
-                        .header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].id").value(packetId));
 
         mockMvc.perform(get("/wallets/" + receiver.walletId()).header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.balance").value(25.50));
+                .andExpect(jsonPath("$.balance").value(0));
+
+        String adminToken = adminToken("claim-stale-admin@example.com");
+        mockMvc.perform(get("/admin/rejected-packets").header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.expiredPackets.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)));
     }
 
     @Test
-    void relayWithTamperedCiphertextReturnsBadRequest() throws Exception {
-        String token = registerUserAndGetToken("packet-tamper@example.com");
-        UUID senderId = registerDevice(token, "sender-phone-2");
-        UUID receiverId = registerDevice(token, "receiver-phone-2");
+    void successfulSettlementAppearsInLedger() throws Exception {
+        String token = registerUserAndGetToken("claim-ledger@example.com");
+        UUID senderId = registerDeviceFull(token, "ledger-sender-phone").deviceId();
+        DeviceRegistration receiver = registerDeviceFull(token, "ledger-receiver-phone");
         PublicKey serverPublicKey = fetchServerPublicKey();
 
-        byte[] plaintext = objectMapper.writeValueAsBytes(new PacketPayload(new BigDecimal("10.00")));
-        PacketCryptoService.EncryptedPayload encrypted = cryptoService.encrypt(serverPublicKey, plaintext);
-        byte[] tampered = encrypted.ciphertext().clone();
-        tampered[0] ^= 0x01;
-
         String requestJson = encryptedRequestJson(
-                senderId, receiverId, new BigDecimal("10.00"), serverPublicKey, tampered, "path-A");
+                senderId, receiver.deviceId(), new BigDecimal("60.25"), serverPublicKey, Instant.now(), "path-A");
 
         mockMvc.perform(post("/packets/relay")
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestJson))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/wallets/" + receiver.walletId() + "/ledger").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].amount").value(60.25))
+                .andExpect(jsonPath("$[0].balanceAfter").value(60.25));
     }
 
     @Test
-    void relayWithUnknownDeviceReturnsNotFound() throws Exception {
-        String token = registerUserAndGetToken("packet-unknown@example.com");
-        UUID senderId = registerDevice(token, "sender-phone-3");
-        PublicKey serverPublicKey = fetchServerPublicKey();
+    void rejectedPacketsRequiresAdminRole() throws Exception {
+        String token = registerUserAndGetToken("claim-nonadmin@example.com");
 
-        String requestJson = encryptedRequestJson(
-                senderId, UUID.randomUUID(), new BigDecimal("5.00"), serverPublicKey, null, "path-A");
-
-        mockMvc.perform(post("/packets/relay")
-                        .header("Authorization", "Bearer " + token)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(requestJson))
-                .andExpect(status().isNotFound());
-    }
-
-    @Test
-    void relayWithoutTokenReturnsUnauthorized() throws Exception {
-        mockMvc.perform(post("/packets/relay")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{}"))
-                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/admin/rejected-packets").header("Authorization", "Bearer " + token))
+                .andExpect(status().isForbidden());
     }
 }

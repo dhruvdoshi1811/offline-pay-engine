@@ -4,16 +4,20 @@ import com.dhruv.offlinepayment_relay.crypto.PacketCryptoService;
 import com.dhruv.offlinepayment_relay.crypto.PacketPayload;
 import com.dhruv.offlinepayment_relay.crypto.ServerKeyService;
 import com.dhruv.offlinepayment_relay.dto.PacketResponse;
+import com.dhruv.offlinepayment_relay.dto.RejectedPacketsResponse;
 import com.dhruv.offlinepayment_relay.dto.RelayPacketRequest;
 import com.dhruv.offlinepayment_relay.dto.RelayPacketResponse;
 import com.dhruv.offlinepayment_relay.entity.PacketStatus;
 import com.dhruv.offlinepayment_relay.entity.PaymentPacket;
+import com.dhruv.offlinepayment_relay.exception.DuplicateResourceException;
 import com.dhruv.offlinepayment_relay.exception.InvalidRequestException;
 import com.dhruv.offlinepayment_relay.exception.ResourceNotFoundException;
 import com.dhruv.offlinepayment_relay.repository.DeviceRepository;
 import com.dhruv.offlinepayment_relay.repository.PaymentPacketRepository;
+import com.dhruv.offlinepayment_relay.repository.RelayLogRepository;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
@@ -21,6 +25,8 @@ import java.math.BigDecimal;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
@@ -34,22 +40,33 @@ public class PaymentPacketService {
     private final PacketCryptoService cryptoService;
     private final ServerKeyService serverKeyService;
     private final ObjectMapper objectMapper;
+    private final PacketClaimService packetClaimService;
+    private final SettlementService settlementService;
+    private final RelayLogRepository relayLogRepository;
+    private final Duration freshnessWindow;
 
     public PaymentPacketService(
             PaymentPacketRepository packetRepository,
             DeviceRepository deviceRepository,
             PacketCryptoService cryptoService,
             ServerKeyService serverKeyService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            PacketClaimService packetClaimService,
+            SettlementService settlementService,
+            RelayLogRepository relayLogRepository,
+            @Value("${app.packet.freshness-window-minutes:5}") long freshnessWindowMinutes
     ) {
         this.packetRepository = packetRepository;
         this.deviceRepository = deviceRepository;
         this.cryptoService = cryptoService;
         this.serverKeyService = serverKeyService;
         this.objectMapper = objectMapper;
+        this.packetClaimService = packetClaimService;
+        this.settlementService = settlementService;
+        this.relayLogRepository = relayLogRepository;
+        this.freshnessWindow = Duration.ofMinutes(freshnessWindowMinutes);
     }
 
-    @Transactional
     public RelayPacketResponse relay(RelayPacketRequest request) {
         requireDevice(request.senderDeviceId());
         requireDevice(request.receiverDeviceId());
@@ -60,20 +77,23 @@ public class PaymentPacketService {
 
         String ciphertextHash = HexFormat.of().formatHex(sha256(ciphertextBytes));
 
+        PaymentPacket packet;
+        try {
+            packet = packetClaimService.claim(ciphertextHash, request);
+        } catch (DataIntegrityViolationException ex) {
+            PaymentPacket existing = packetClaimService.recordDuplicateDelivery(ciphertextHash, request.relayPathId());
+            throw new DuplicateResourceException(
+                    "packet already claimed (id " + existing.getId() + ", status " + existing.getStatus() + ")");
+        }
+
+        if (isStale(request.packetTimestamp())) {
+            packetClaimService.rejectExpired(packet.getId());
+            throw new InvalidRequestException("packet timestamp outside freshness window");
+        }
+
         PacketPayload payload = decryptPayload(ciphertextBytes, encryptedSessionKeyBytes, nonceBytes);
 
-        PaymentPacket packet = PaymentPacket.builder()
-                .id(UUID.randomUUID())
-                .senderDeviceId(request.senderDeviceId())
-                .receiverDeviceId(request.receiverDeviceId())
-                .ciphertext(request.ciphertext())
-                .ciphertextHash(ciphertextHash)
-                .encryptedSessionKey(request.encryptedSessionKey())
-                .nonce(request.nonce())
-                .packetTimestamp(request.packetTimestamp())
-                .status(PacketStatus.RECEIVED)
-                .build();
-        packetRepository.save(packet);
+        settlementService.settle(packet.getId(), request.receiverDeviceId(), payload.amount());
 
         return new RelayPacketResponse(
                 packet.getId(),
@@ -81,7 +101,7 @@ public class PaymentPacketService {
                 packet.getReceiverDeviceId(),
                 packet.getCiphertextHash(),
                 packet.getPacketTimestamp(),
-                packet.getStatus().name(),
+                PacketStatus.SETTLED.name(),
                 payload.amount()
         );
     }
@@ -98,6 +118,19 @@ public class PaymentPacketService {
                 .toList();
     }
 
+    public RejectedPacketsResponse getRejectedPackets() {
+        List<PacketResponse> expired = packetRepository.findByStatus(PacketStatus.REJECTED_EXPIRED).stream()
+                .map(this::toResponse)
+                .toList();
+
+        List<UUID> duplicateDeliveryIds = relayLogRepository.findPacketIdsWithMultipleDeliveries();
+        List<PacketResponse> duplicateDeliveries = packetRepository.findAllById(duplicateDeliveryIds).stream()
+                .map(this::toResponse)
+                .toList();
+
+        return new RejectedPacketsResponse(expired, duplicateDeliveries);
+    }
+
     private void requireDevice(UUID deviceId) {
         if (!deviceRepository.existsById(deviceId)) {
             throw new ResourceNotFoundException("device not found: " + deviceId);
@@ -110,6 +143,11 @@ public class PaymentPacketService {
         } catch (IllegalArgumentException ex) {
             throw new InvalidRequestException(fieldName + " must be valid Base64");
         }
+    }
+
+    private boolean isStale(Instant packetTimestamp) {
+        Duration diff = Duration.between(packetTimestamp, Instant.now()).abs();
+        return diff.compareTo(freshnessWindow) > 0;
     }
 
     private PacketPayload decryptPayload(byte[] ciphertext, byte[] encryptedSessionKey, byte[] nonce) {

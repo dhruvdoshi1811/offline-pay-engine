@@ -1,6 +1,7 @@
 package com.dhruv.offlinepayment_relay.controller;
 
 import com.dhruv.offlinepayment_relay.dto.FundRequest;
+import com.dhruv.offlinepayment_relay.dto.LedgerEntryResponse;
 import com.dhruv.offlinepayment_relay.dto.WalletResponse;
 import com.dhruv.offlinepayment_relay.service.WalletService;
 import jakarta.validation.Valid;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -34,5 +36,10 @@ public class WalletController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<WalletResponse> fund(@PathVariable UUID id, @Valid @RequestBody FundRequest request) {
         return ResponseEntity.ok(walletService.fund(id, request.amount()));
+    }
+
+    @GetMapping("/{id}/ledger")
+    public ResponseEntity<List<LedgerEntryResponse>> getLedger(@PathVariable UUID id) {
+        return ResponseEntity.ok(walletService.getLedger(id));
     }
 }

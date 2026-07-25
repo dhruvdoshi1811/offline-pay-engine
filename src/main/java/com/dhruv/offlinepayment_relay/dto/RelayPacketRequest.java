@@ -24,6 +24,9 @@ public record RelayPacketRequest(
         String nonce,
 
         @NotNull
-        Instant packetTimestamp
+        Instant packetTimestamp,
+
+        @NotBlank
+        String relayPathId
 ) {
 }
