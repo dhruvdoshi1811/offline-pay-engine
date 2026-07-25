@@ -1,0 +1,7 @@
+target/
+data/
+.git/
+.idea/
+*.iml
+.mvn/wrapper/maven-wrapper.jar
+HELP.md

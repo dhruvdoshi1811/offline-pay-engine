@@ -1,0 +1,40 @@
+databases:
+  - name: offlinepayment-relay-db
+    plan: free
+
+services:
+  - type: web
+    name: offlinepayment-relay
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /actuator/health
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+      - key: DATABASE_HOST
+        fromDatabase:
+          name: offlinepayment-relay-db
+          property: host
+      - key: DATABASE_PORT
+        fromDatabase:
+          name: offlinepayment-relay-db
+          property: port
+      - key: DATABASE_NAME
+        fromDatabase:
+          name: offlinepayment-relay-db
+          property: database
+      - key: DATABASE_USERNAME
+        fromDatabase:
+          name: offlinepayment-relay-db
+          property: user
+      - key: DATABASE_PASSWORD
+        fromDatabase:
+          name: offlinepayment-relay-db
+          property: password
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRATION_MS
+        value: "3600000"
+      - key: PACKET_FRESHNESS_WINDOW_MINUTES
+        value: "5"

@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: offlinepayment
+      POSTGRES_USER: offlinepayment
+      POSTGRES_PASSWORD: offlinepayment
+    ports:
+      - "5432:5432"
+    volumes:
+      - offlinepayment-db-data:/var/lib/postgresql/data
+
+  app:
+    build: .
+    depends_on:
+      - db
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DATABASE_HOST: db
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: offlinepayment
+      DATABASE_USERNAME: offlinepayment
+      DATABASE_PASSWORD: offlinepayment
+      JWT_SECRET: local-compose-secret-not-for-production-use-0123456789
+    ports:
+      - "8080:8080"
+
+volumes:
+  offlinepayment-db-data:
