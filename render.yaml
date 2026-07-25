@@ -38,3 +38,9 @@ services:
         value: "3600000"
       - key: PACKET_FRESHNESS_WINDOW_MINUTES
         value: "5"
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false

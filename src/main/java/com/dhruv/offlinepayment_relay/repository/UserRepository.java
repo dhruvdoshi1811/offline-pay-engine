@@ -1,5 +1,6 @@
 package com.dhruv.offlinepayment_relay.repository;
 
+import com.dhruv.offlinepayment_relay.entity.Role;
 import com.dhruv.offlinepayment_relay.entity.User;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -11,4 +12,6 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findByEmail(String email);
 
     boolean existsByEmail(String email);
+
+    boolean existsByRole(Role role);
 }
