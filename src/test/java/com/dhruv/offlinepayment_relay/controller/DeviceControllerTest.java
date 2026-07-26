@@ -100,4 +100,30 @@ class DeviceControllerTest {
         mockMvc.perform(get("/devices/" + UUID.randomUUID()).header("Authorization", "Bearer " + token))
                 .andExpect(status().isNotFound());
     }
+
+    @Test
+    void listMineOnlyReturnsCallersOwnDevices() throws Exception {
+        String tokenA = registerUserAndGetToken("owner-a@example.com");
+        String tokenB = registerUserAndGetToken("owner-b@example.com");
+
+        DeviceRequest deviceA = new DeviceRequest("device-a", TestKeys.randomRsaPublicKeyBase64());
+        String responseA = mockMvc.perform(post("/devices")
+                        .header("Authorization", "Bearer " + tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(deviceA)))
+                .andReturn().getResponse().getContentAsString();
+        String deviceAId = objectMapper.readTree(responseA).get("id").asText();
+
+        DeviceRequest deviceB = new DeviceRequest("device-b", TestKeys.randomRsaPublicKeyBase64());
+        mockMvc.perform(post("/devices")
+                .header("Authorization", "Bearer " + tokenB)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(deviceB)));
+
+        mockMvc.perform(get("/devices/mine").header("Authorization", "Bearer " + tokenA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(deviceAId))
+                .andExpect(jsonPath("$[0].ownerName").value("device-a"));
+    }
 }

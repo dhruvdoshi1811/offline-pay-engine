@@ -2,13 +2,35 @@ import { useState } from 'react'
 import { api } from '../api'
 import { encryptPayload } from '../crypto'
 
-export default function SendPaymentPanel({ token, senderDeviceId, receiverDeviceId, onSettled }) {
+export default function SendPaymentPanel({ token, senderDeviceId, onSettled }) {
+  const [recipientId, setRecipientId] = useState('')
+  const [recipient, setRecipient] = useState(null)
+  const [lookupError, setLookupError] = useState(null)
+  const [lookingUp, setLookingUp] = useState(false)
+
   const [amount, setAmount] = useState('25.00')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [result, setResult] = useState(null)
 
-  const ready = Boolean(senderDeviceId && receiverDeviceId)
+  function handleRecipientIdChange(value) {
+    setRecipientId(value)
+    setRecipient(null)
+    setLookupError(null)
+  }
+
+  async function handleLookup() {
+    setLookupError(null)
+    setLookingUp(true)
+    try {
+      const device = await api.getDevice(token, recipientId)
+      setRecipient(device)
+    } catch (err) {
+      setLookupError('No device found with that ID')
+    } finally {
+      setLookingUp(false)
+    }
+  }
 
   async function handleSend(event) {
     event.preventDefault()
@@ -21,7 +43,7 @@ export default function SendPaymentPanel({ token, senderDeviceId, receiverDevice
       const response = await api.relayPacket(
         token,
         senderDeviceId,
-        receiverDeviceId,
+        recipient.id,
         encrypted,
         new Date().toISOString(),
         'browser-send',
@@ -35,16 +57,44 @@ export default function SendPaymentPanel({ token, senderDeviceId, receiverDevice
     }
   }
 
+  if (!senderDeviceId) {
+    return (
+      <div className="rounded-lg border border-indigo-700 bg-indigo-950/40 p-4 text-sm text-slate-500">
+        Register a device of your own first.
+      </div>
+    )
+  }
+
   return (
     <div className="rounded-lg border border-indigo-700 bg-indigo-950/40 p-4">
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-indigo-300">Send Payment</h2>
 
-      {!ready && (
-        <p className="text-sm text-slate-500">Register both a sender and a receiver device first.</p>
-      )}
+      <label className="flex flex-col text-xs text-slate-400">
+        recipient device ID
+        <div className="mt-1 flex gap-2">
+          <input
+            type="text"
+            placeholder="paste the recipient's device ID"
+            value={recipientId}
+            onChange={(event) => handleRecipientIdChange(event.target.value)}
+            className="flex-1 rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-slate-100"
+          />
+          <button
+            type="button"
+            onClick={handleLookup}
+            disabled={!recipientId || lookingUp}
+            className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+          >
+            {lookingUp ? 'Looking up…' : 'Look up'}
+          </button>
+        </div>
+      </label>
 
-      {ready && (
-        <form onSubmit={handleSend} className="flex flex-wrap items-end gap-3">
+      {lookupError && <p className="mt-1 text-sm text-red-400">{lookupError}</p>}
+      {recipient && <p className="mt-1 text-sm text-emerald-400">Sending to: {recipient.ownerName}</p>}
+
+      {recipient && (
+        <form onSubmit={handleSend} className="mt-3 flex flex-wrap items-end gap-3">
           <label className="flex flex-col text-xs text-slate-400">
             amount
             <input

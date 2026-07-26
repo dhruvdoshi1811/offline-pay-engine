@@ -1,14 +1,36 @@
 import { useState } from 'react'
 import { api } from '../api'
 
-export default function DemoPanel({ token, senderDeviceId, receiverDeviceId, onSettled }) {
-  const [amount, setAmount] = useState('40.00')
+export default function DemoPanel({ token, senderDeviceId, onSettled }) {
+  const [recipientId, setRecipientId] = useState('')
+  const [recipient, setRecipient] = useState(null)
+  const [lookupError, setLookupError] = useState(null)
+  const [lookingUp, setLookingUp] = useState(false)
+
+  const [amount, setAmount] = useState('10.00')
   const [concurrentPaths, setConcurrentPaths] = useState(5)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
 
-  const ready = Boolean(senderDeviceId && receiverDeviceId)
+  function handleRecipientIdChange(value) {
+    setRecipientId(value)
+    setRecipient(null)
+    setLookupError(null)
+  }
+
+  async function handleLookup() {
+    setLookupError(null)
+    setLookingUp(true)
+    try {
+      const device = await api.getDevice(token, recipientId)
+      setRecipient(device)
+    } catch (err) {
+      setLookupError('No device found with that ID')
+    } finally {
+      setLookingUp(false)
+    }
+  }
 
   async function handleTrigger(event) {
     event.preventDefault()
@@ -19,7 +41,7 @@ export default function DemoPanel({ token, senderDeviceId, receiverDeviceId, onS
       const response = await api.simulateDuplicateDelivery(
         token,
         senderDeviceId,
-        receiverDeviceId,
+        recipient.id,
         Number(amount),
         Number(concurrentPaths),
       )
@@ -42,12 +64,40 @@ export default function DemoPanel({ token, senderDeviceId, receiverDeviceId, onS
         paths at once, to prove only one of them ever settles.
       </p>
 
-      {!ready && (
-        <p className="text-sm text-slate-500">Register both a sender and a receiver device first.</p>
+      {!senderDeviceId && (
+        <p className="text-sm text-slate-500">Register a device of your own first.</p>
       )}
 
-      {ready && (
-        <form onSubmit={handleTrigger} className="flex flex-wrap items-end gap-3">
+      {senderDeviceId && (
+        <>
+          <label className="flex flex-col text-xs text-slate-400">
+            recipient device ID
+            <div className="mt-1 flex gap-2">
+              <input
+                type="text"
+                placeholder="paste the recipient's device ID"
+                value={recipientId}
+                onChange={(event) => handleRecipientIdChange(event.target.value)}
+                className="flex-1 rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-slate-100"
+              />
+              <button
+                type="button"
+                onClick={handleLookup}
+                disabled={!recipientId || lookingUp}
+                className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+              >
+                {lookingUp ? 'Looking up…' : 'Look up'}
+              </button>
+            </div>
+          </label>
+
+          {lookupError && <p className="mt-1 text-sm text-red-400">{lookupError}</p>}
+          {recipient && <p className="mt-1 text-sm text-emerald-400">Target: {recipient.ownerName}</p>}
+        </>
+      )}
+
+      {recipient && (
+        <form onSubmit={handleTrigger} className="mt-3 flex flex-wrap items-end gap-3">
           <label className="flex flex-col text-xs text-slate-400">
             amount
             <input

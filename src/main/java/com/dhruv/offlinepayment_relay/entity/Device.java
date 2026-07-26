@@ -30,6 +30,9 @@ public class Device {
     @Column(name = "owner_name", nullable = false)
     private String ownerName;
 
+    @Column(name = "owner_user_id", nullable = false)
+    private UUID ownerUserId;
+
     @Column(name = "public_key", nullable = false, columnDefinition = "TEXT")
     private String publicKey;
 

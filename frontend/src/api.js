@@ -29,6 +29,7 @@ export const api = {
   getServerPublicKey: () => request('/crypto/public-key'),
   registerDevice: (token, ownerName, publicKey) =>
     request('/devices', { method: 'POST', body: { ownerName, publicKey }, token }),
+  listMyDevices: (token) => request('/devices/mine', { token }),
   getDevice: (token, id) => request(`/devices/${id}`, { token }),
   getWallet: (token, id) => request(`/wallets/${id}`, { token }),
   getLedger: (token, id) => request(`/wallets/${id}/ledger`, { token }),

@@ -16,6 +16,7 @@ import java.security.KeyFactory;
 import java.security.spec.X509EncodedKeySpec;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -30,12 +31,13 @@ public class DeviceService {
     }
 
     @Transactional
-    public DeviceResponse register(DeviceRequest request) {
+    public DeviceResponse register(DeviceRequest request, UUID ownerUserId) {
         validatePublicKey(request.publicKey());
 
         Device device = Device.builder()
                 .id(UUID.randomUUID())
                 .ownerName(request.ownerName())
+                .ownerUserId(ownerUserId)
                 .publicKey(request.publicKey())
                 .registeredAt(Instant.now())
                 .build();
@@ -57,6 +59,16 @@ public class DeviceService {
         Wallet wallet = walletRepository.findByDeviceId(id)
                 .orElseThrow(() -> new ResourceNotFoundException("wallet not found for device: " + id));
         return toResponse(device, wallet.getId());
+    }
+
+    public List<DeviceResponse> listMine(UUID ownerUserId) {
+        return deviceRepository.findByOwnerUserId(ownerUserId).stream()
+                .map(device -> {
+                    Wallet wallet = walletRepository.findByDeviceId(device.getId())
+                            .orElseThrow(() -> new ResourceNotFoundException("wallet not found for device: " + device.getId()));
+                    return toResponse(device, wallet.getId());
+                })
+                .toList();
     }
 
     private void validatePublicKey(String publicKey) {
