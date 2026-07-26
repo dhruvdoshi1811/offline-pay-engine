@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 
-export default function WalletPanel({ token, walletId, refreshSignal }) {
+export default function WalletPanel({ token, label, walletId, refreshSignal }) {
   const [wallet, setWallet] = useState(null)
   const [ledger, setLedger] = useState([])
-  const [amount, setAmount] = useState('25.00')
+  const [amount, setAmount] = useState('100.00')
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
 
@@ -33,7 +33,7 @@ export default function WalletPanel({ token, walletId, refreshSignal }) {
       await refresh()
     } catch (err) {
       if (err.status === 403) {
-        setError('Admin role required — log in as the seeded admin account to fund wallets.')
+        setError('Admin role required — log in as the seeded admin account to seed a test balance.')
       } else {
         setError(err.message)
       }
@@ -45,20 +45,20 @@ export default function WalletPanel({ token, walletId, refreshSignal }) {
   if (!walletId) {
     return (
       <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 text-sm text-slate-500">
-        Register a receiver device to see its wallet.
+        Register the {label.toLowerCase()} to see its wallet.
       </div>
     )
   }
 
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-800 p-4">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Receiver Wallet</h2>
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">{label}</h2>
 
       <p className="text-2xl font-semibold text-slate-100">
         {wallet ? `$${wallet.balance}` : '—'}
       </p>
 
-      <form onSubmit={handleFund} className="mt-4 flex gap-2">
+      <form onSubmit={handleFund} className="mt-4 flex flex-wrap items-center gap-2">
         <input
           type="number"
           step="0.01"
@@ -70,9 +70,9 @@ export default function WalletPanel({ token, walletId, refreshSignal }) {
         <button
           type="submit"
           disabled={loading}
-          className="rounded bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+          className="rounded bg-slate-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-600 disabled:opacity-50"
         >
-          Fund
+          Seed test balance (admin)
         </button>
       </form>
 
@@ -84,7 +84,7 @@ export default function WalletPanel({ token, walletId, refreshSignal }) {
           <ul className="space-y-1 text-xs text-slate-400">
             {ledger.map((entry) => (
               <li key={entry.id}>
-                +${entry.amount} → balance ${entry.balanceAfter} ({new Date(entry.settledAt).toLocaleTimeString()})
+                {entry.amount} → balance {entry.balanceAfter} ({new Date(entry.settledAt).toLocaleTimeString()})
               </li>
             ))}
           </ul>

@@ -77,6 +77,14 @@ class PacketClaimAndSettlementTest {
         return jwtService.issueToken(admin.getEmail(), admin.getRole().name());
     }
 
+    private void fundWallet(UUID walletId, String amount) throws Exception {
+        String token = adminToken("fund-admin-" + walletId + "@example.com");
+        mockMvc.perform(post("/wallets/" + walletId + "/fund")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"amount\":" + amount + "}"));
+    }
+
     private DeviceRegistration registerDeviceFull(String token, String ownerName) throws Exception {
         DeviceRequest request = new DeviceRequest(ownerName, TestKeys.randomRsaPublicKeyBase64());
         String response = mockMvc.perform(post("/devices")
@@ -115,12 +123,13 @@ class PacketClaimAndSettlementTest {
     @Test
     void duplicateDeliveryViaDifferentPathIsRejectedAndSettlesOnlyOnce() throws Exception {
         String token = registerUserAndGetToken("claim-sender@example.com");
-        UUID senderId = registerDeviceFull(token, "claim-sender-phone").deviceId();
+        DeviceRegistration sender = registerDeviceFull(token, "claim-sender-phone");
         DeviceRegistration receiver = registerDeviceFull(token, "claim-receiver-phone");
         PublicKey serverPublicKey = fetchServerPublicKey();
+        fundWallet(sender.walletId(), "100.00");
 
         String requestJson = encryptedRequestJson(
-                senderId, receiver.deviceId(), new BigDecimal("40.00"), serverPublicKey, Instant.now(), "path-A");
+                sender.deviceId(), receiver.deviceId(), new BigDecimal("40.00"), serverPublicKey, Instant.now(), "path-A");
 
         String firstResponse = mockMvc.perform(post("/packets/relay")
                         .header("Authorization", "Bearer " + token)
@@ -142,6 +151,10 @@ class PacketClaimAndSettlementTest {
         mockMvc.perform(get("/wallets/" + receiver.walletId()).header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.balance").value(40.00));
+
+        mockMvc.perform(get("/wallets/" + sender.walletId()).header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.balance").value(60.00));
 
         String adminToken = adminToken("claim-admin@example.com");
         String rejectedResponse = mockMvc.perform(get("/admin/rejected-packets").header("Authorization", "Bearer " + adminToken))
@@ -189,12 +202,13 @@ class PacketClaimAndSettlementTest {
     @Test
     void successfulSettlementAppearsInLedger() throws Exception {
         String token = registerUserAndGetToken("claim-ledger@example.com");
-        UUID senderId = registerDeviceFull(token, "ledger-sender-phone").deviceId();
+        DeviceRegistration sender = registerDeviceFull(token, "ledger-sender-phone");
         DeviceRegistration receiver = registerDeviceFull(token, "ledger-receiver-phone");
         PublicKey serverPublicKey = fetchServerPublicKey();
+        fundWallet(sender.walletId(), "100.00");
 
         String requestJson = encryptedRequestJson(
-                senderId, receiver.deviceId(), new BigDecimal("60.25"), serverPublicKey, Instant.now(), "path-A");
+                sender.deviceId(), receiver.deviceId(), new BigDecimal("60.25"), serverPublicKey, Instant.now(), "path-A");
 
         mockMvc.perform(post("/packets/relay")
                         .header("Authorization", "Bearer " + token)
@@ -214,5 +228,36 @@ class PacketClaimAndSettlementTest {
 
         mockMvc.perform(get("/admin/rejected-packets").header("Authorization", "Bearer " + token))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void relayWithUnfundedSenderIsRejectedAsInsufficientFunds() throws Exception {
+        String token = registerUserAndGetToken("claim-insufficient@example.com");
+        DeviceRegistration sender = registerDeviceFull(token, "insufficient-sender-phone");
+        DeviceRegistration receiver = registerDeviceFull(token, "insufficient-receiver-phone");
+        PublicKey serverPublicKey = fetchServerPublicKey();
+
+        String requestJson = encryptedRequestJson(
+                sender.deviceId(), receiver.deviceId(), new BigDecimal("50.00"), serverPublicKey, Instant.now(), "path-A");
+
+        String response = mockMvc.perform(post("/packets/relay")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson))
+                .andExpect(status().isBadRequest())
+                .andReturn().getResponse().getContentAsString();
+
+        mockMvc.perform(get("/wallets/" + receiver.walletId()).header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.balance").value(0));
+
+        mockMvc.perform(get("/wallets/" + sender.walletId()).header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.balance").value(0));
+
+        String adminToken = adminToken("claim-insufficient-admin@example.com");
+        mockMvc.perform(get("/admin/rejected-packets").header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.insufficientFundsPackets.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)));
     }
 }

@@ -61,6 +61,14 @@ public class PacketClaimService {
         packetRepository.save(packet);
     }
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void rejectInsufficientFunds(UUID packetId) {
+        PaymentPacket packet = packetRepository.findById(packetId)
+                .orElseThrow(() -> new ResourceNotFoundException("packet not found: " + packetId));
+        packet.setStatus(PacketStatus.REJECTED_INSUFFICIENT_FUNDS);
+        packetRepository.save(packet);
+    }
+
     private void logDelivery(UUID packetId, String relayPathId) {
         relayLogRepository.save(RelayLog.builder()
                 .id(UUID.randomUUID())

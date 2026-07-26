@@ -5,18 +5,23 @@ import com.dhruv.offlinepayment_relay.dto.RegisterRequest;
 import com.dhruv.offlinepayment_relay.entity.PacketStatus;
 import com.dhruv.offlinepayment_relay.entity.PaymentPacket;
 import com.dhruv.offlinepayment_relay.entity.RelayLog;
+import com.dhruv.offlinepayment_relay.entity.Role;
 import com.dhruv.offlinepayment_relay.entity.SettlementLedgerEntry;
+import com.dhruv.offlinepayment_relay.entity.User;
 import com.dhruv.offlinepayment_relay.entity.Wallet;
 import com.dhruv.offlinepayment_relay.repository.PaymentPacketRepository;
 import com.dhruv.offlinepayment_relay.repository.RelayLogRepository;
 import com.dhruv.offlinepayment_relay.repository.SettlementLedgerEntryRepository;
+import com.dhruv.offlinepayment_relay.repository.UserRepository;
 import com.dhruv.offlinepayment_relay.repository.WalletRepository;
+import com.dhruv.offlinepayment_relay.security.JwtService;
 import com.dhruv.offlinepayment_relay.support.TestKeys;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -52,7 +57,35 @@ class DemoControllerTest {
     @Autowired
     private SettlementLedgerEntryRepository ledgerRepository;
 
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private JwtService jwtService;
+
     private record DeviceRegistration(UUID deviceId, UUID walletId) {
+    }
+
+    private String adminToken(String email) {
+        User admin = User.builder()
+                .id(UUID.randomUUID())
+                .email(email)
+                .passwordHash(passwordEncoder.encode("password123"))
+                .role(Role.ADMIN)
+                .build();
+        userRepository.save(admin);
+        return jwtService.issueToken(admin.getEmail(), admin.getRole().name());
+    }
+
+    private void fundWallet(UUID walletId, String amount) throws Exception {
+        String token = adminToken("fund-admin-" + walletId + "@example.com");
+        mockMvc.perform(post("/wallets/" + walletId + "/fund")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"amount\":" + amount + "}"));
     }
 
     private String registerUserAndGetToken(String email) throws Exception {
@@ -79,13 +112,14 @@ class DemoControllerTest {
     @Test
     void concurrentDuplicateDeliverySettlesExactlyOnce() throws Exception {
         String token = registerUserAndGetToken("demo-sender@example.com");
-        UUID senderId = registerDeviceFull(token, "demo-sender-phone").deviceId();
+        DeviceRegistration sender = registerDeviceFull(token, "demo-sender-phone");
         DeviceRegistration receiver = registerDeviceFull(token, "demo-receiver-phone");
+        fundWallet(sender.walletId(), "100.00");
 
         int concurrentPaths = 5;
         String requestJson = String.format(
                 "{\"senderDeviceId\":\"%s\",\"receiverDeviceId\":\"%s\",\"amount\":20.00,\"concurrentPaths\":%d}",
-                senderId, receiver.deviceId(), concurrentPaths);
+                sender.deviceId(), receiver.deviceId(), concurrentPaths);
 
         String response = mockMvc.perform(post("/demo/simulate-duplicate-delivery")
                         .header("Authorization", "Bearer " + token)
@@ -109,6 +143,9 @@ class DemoControllerTest {
 
         Wallet wallet = walletRepository.findById(receiver.walletId()).orElseThrow();
         assertEquals(0, new BigDecimal("20.00").compareTo(wallet.getBalance()));
+
+        Wallet senderWallet = walletRepository.findById(sender.walletId()).orElseThrow();
+        assertEquals(0, new BigDecimal("80.00").compareTo(senderWallet.getBalance()));
 
         List<SettlementLedgerEntry> ledgerEntries =
                 ledgerRepository.findByPacketIdInOrderBySettledAtAsc(List.of(packetId));

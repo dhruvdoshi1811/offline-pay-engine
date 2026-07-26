@@ -1,0 +1,1 @@
+ALTER TABLE payment_packets ALTER COLUMN status TYPE VARCHAR(30);

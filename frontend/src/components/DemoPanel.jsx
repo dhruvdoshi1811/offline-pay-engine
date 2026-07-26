@@ -34,9 +34,13 @@ export default function DemoPanel({ token, senderDeviceId, receiverDeviceId, onS
 
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-800 p-4">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
-        Duplicate-Delivery Demo
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
+        Concurrency Proof — Exactly-Once Settlement
       </h2>
+      <p className="mb-3 text-xs text-slate-500">
+        Not a payment action — this fires the same encrypted packet through several simulated relay
+        paths at once, to prove only one of them ever settles.
+      </p>
 
       {!ready && (
         <p className="text-sm text-slate-500">Register both a sender and a receiver device first.</p>

@@ -4,6 +4,7 @@ import com.dhruv.offlinepayment_relay.entity.PacketStatus;
 import com.dhruv.offlinepayment_relay.entity.PaymentPacket;
 import com.dhruv.offlinepayment_relay.entity.SettlementLedgerEntry;
 import com.dhruv.offlinepayment_relay.entity.Wallet;
+import com.dhruv.offlinepayment_relay.exception.InsufficientFundsException;
 import com.dhruv.offlinepayment_relay.exception.ResourceNotFoundException;
 import com.dhruv.offlinepayment_relay.repository.PaymentPacketRepository;
 import com.dhruv.offlinepayment_relay.repository.SettlementLedgerEntryRepository;
@@ -33,18 +34,27 @@ public class SettlementService {
     }
 
     @Transactional
-    public void settle(UUID packetId, UUID receiverDeviceId, BigDecimal amount) {
-        Wallet wallet = walletRepository.findByDeviceId(receiverDeviceId)
+    public void settle(UUID packetId, UUID senderDeviceId, UUID receiverDeviceId, BigDecimal amount) {
+        Wallet senderWallet = walletRepository.findByDeviceId(senderDeviceId)
+                .orElseThrow(() -> new ResourceNotFoundException("wallet not found for device: " + senderDeviceId));
+        Wallet receiverWallet = walletRepository.findByDeviceId(receiverDeviceId)
                 .orElseThrow(() -> new ResourceNotFoundException("wallet not found for device: " + receiverDeviceId));
 
-        wallet.setBalance(wallet.getBalance().add(amount));
-        walletRepository.save(wallet);
+        if (senderWallet.getBalance().compareTo(amount) < 0) {
+            throw new InsufficientFundsException("sender wallet has insufficient balance");
+        }
+
+        senderWallet.setBalance(senderWallet.getBalance().subtract(amount));
+        walletRepository.save(senderWallet);
+
+        receiverWallet.setBalance(receiverWallet.getBalance().add(amount));
+        walletRepository.save(receiverWallet);
 
         SettlementLedgerEntry entry = SettlementLedgerEntry.builder()
                 .id(UUID.randomUUID())
                 .packetId(packetId)
                 .amount(amount)
-                .balanceAfter(wallet.getBalance())
+                .balanceAfter(receiverWallet.getBalance())
                 .settledAt(Instant.now())
                 .build();
         ledgerRepository.save(entry);

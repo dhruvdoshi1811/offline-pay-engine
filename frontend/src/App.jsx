@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from './api'
 import AuthPanel from './components/AuthPanel'
 import DevicePanel from './components/DevicePanel'
+import SendPaymentPanel from './components/SendPaymentPanel'
 import WalletPanel from './components/WalletPanel'
 import DemoPanel from './components/DemoPanel'
 
@@ -36,6 +37,8 @@ export default function App() {
     return <AuthPanel onAuthenticated={setToken} />
   }
 
+  const bumpRefresh = () => setRefreshSignal((value) => value + 1)
+
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
       <header className="mb-6 flex items-center justify-between">
@@ -60,7 +63,27 @@ export default function App() {
       </div>
 
       <div className="mt-4">
-        <WalletPanel token={token} walletId={receiverDevice?.walletId} refreshSignal={refreshSignal} />
+        <SendPaymentPanel
+          token={token}
+          senderDeviceId={senderDevice?.id}
+          receiverDeviceId={receiverDevice?.id}
+          onSettled={bumpRefresh}
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <WalletPanel
+          token={token}
+          label="Sender Wallet"
+          walletId={senderDevice?.walletId}
+          refreshSignal={refreshSignal}
+        />
+        <WalletPanel
+          token={token}
+          label="Receiver Wallet"
+          walletId={receiverDevice?.walletId}
+          refreshSignal={refreshSignal}
+        />
       </div>
 
       <div className="mt-4">
@@ -68,7 +91,7 @@ export default function App() {
           token={token}
           senderDeviceId={senderDevice?.id}
           receiverDeviceId={receiverDevice?.id}
-          onSettled={() => setRefreshSignal((value) => value + 1)}
+          onSettled={bumpRefresh}
         />
       </div>
     </div>

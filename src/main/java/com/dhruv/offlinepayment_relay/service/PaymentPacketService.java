@@ -10,6 +10,7 @@ import com.dhruv.offlinepayment_relay.dto.RelayPacketResponse;
 import com.dhruv.offlinepayment_relay.entity.PacketStatus;
 import com.dhruv.offlinepayment_relay.entity.PaymentPacket;
 import com.dhruv.offlinepayment_relay.exception.DuplicateResourceException;
+import com.dhruv.offlinepayment_relay.exception.InsufficientFundsException;
 import com.dhruv.offlinepayment_relay.exception.InvalidRequestException;
 import com.dhruv.offlinepayment_relay.exception.ResourceNotFoundException;
 import com.dhruv.offlinepayment_relay.repository.DeviceRepository;
@@ -93,7 +94,13 @@ public class PaymentPacketService {
 
         PacketPayload payload = decryptPayload(ciphertextBytes, encryptedSessionKeyBytes, nonceBytes);
 
-        settlementService.settle(packet.getId(), request.receiverDeviceId(), payload.amount());
+        try {
+            settlementService.settle(
+                    packet.getId(), request.senderDeviceId(), request.receiverDeviceId(), payload.amount());
+        } catch (InsufficientFundsException ex) {
+            packetClaimService.rejectInsufficientFunds(packet.getId());
+            throw new InvalidRequestException("sender wallet has insufficient balance");
+        }
 
         return new RelayPacketResponse(
                 packet.getId(),
@@ -128,7 +135,12 @@ public class PaymentPacketService {
                 .map(this::toResponse)
                 .toList();
 
-        return new RejectedPacketsResponse(expired, duplicateDeliveries);
+        List<PacketResponse> insufficientFunds =
+                packetRepository.findByStatus(PacketStatus.REJECTED_INSUFFICIENT_FUNDS).stream()
+                        .map(this::toResponse)
+                        .toList();
+
+        return new RejectedPacketsResponse(expired, duplicateDeliveries, insufficientFunds);
     }
 
     private void requireDevice(UUID deviceId) {

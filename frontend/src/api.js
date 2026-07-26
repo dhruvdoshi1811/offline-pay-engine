@@ -34,6 +34,20 @@ export const api = {
   getLedger: (token, id) => request(`/wallets/${id}/ledger`, { token }),
   fundWallet: (token, id, amount) =>
     request(`/wallets/${id}/fund`, { method: 'POST', body: { amount }, token }),
+  relayPacket: (token, senderDeviceId, receiverDeviceId, encrypted, packetTimestamp, relayPathId) =>
+    request('/packets/relay', {
+      method: 'POST',
+      body: {
+        senderDeviceId,
+        receiverDeviceId,
+        ciphertext: encrypted.ciphertext,
+        encryptedSessionKey: encrypted.encryptedSessionKey,
+        nonce: encrypted.nonce,
+        packetTimestamp,
+        relayPathId,
+      },
+      token,
+    }),
   simulateDuplicateDelivery: (token, senderDeviceId, receiverDeviceId, amount, concurrentPaths) =>
     request('/demo/simulate-duplicate-delivery', {
       method: 'POST',
